@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark"><meta name="theme-color" content="#0b0f14">
+<title>Tremor Meter</title>
+<style>
+:root{--bg:#0b0f14;--card:#151c25;--line:#2a3542;--tx:#f2f5f8;--mut:#9fb0c2;--ac:#4cc9f0;--ok:#80ed99;--wn:#ffb703;--bad:#ff6b6b}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--tx);font:16px/1.4 system-ui,-apple-system,sans-serif;overscroll-behavior:none;touch-action:manipulation}
+body{padding:env(safe-area-inset-top) 12px env(safe-area-inset-bottom)}
+.s{display:none;flex-direction:column;gap:12px;min-height:100%;padding:12px 0;max-width:520px;margin:0 auto}
+.s.on{display:flex}
+h1{font-size:22px;margin:0}
+h2{font-size:13px;color:var(--mut);margin:4px 0 -4px;text-transform:uppercase;letter-spacing:.06em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+.lbl{color:var(--mut);font-size:13px}
+.big{font-size:32px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1}
+button{font:inherit;font-weight:700;min-height:52px;border-radius:12px;border:2px solid var(--ac);background:transparent;color:var(--ac);padding:0 14px}
+button.p{background:var(--ac);color:#04121a}
+button.d{border-color:var(--bad);color:var(--bad)}
+.row{display:flex;gap:8px}.row>*{flex:1}
+.col{display:flex;flex-direction:column;gap:12px}
+.seg button{border-color:var(--line);color:var(--tx)}
+.seg button.on{border-color:var(--ac);background:#12303c;color:var(--ac)}
+input[type=text]{width:100%;min-height:48px;margin-top:4px;border-radius:10px;border:1px solid var(--line);background:#0e141b;color:var(--tx);font:inherit;padding:0 12px}
+canvas{width:100%;display:block;background:#0e141b;border-radius:8px}
+.plot{height:190px}
+.msg{color:var(--wn)}.msg:empty{display:none}
+.note{font-size:13px;color:var(--mut);border-left:3px solid var(--wn);padding-left:10px}
+.bar{height:14px;background:#1b2531;border-radius:7px;overflow:hidden}.bar i{display:block;height:100%;width:0;background:var(--ac)}
+.kv{display:grid;grid-template-columns:1fr auto;gap:4px 12px;font-variant-numeric:tabular-nums}
+.band{display:grid;grid-template-columns:92px 1fr 48px;gap:8px;align-items:center;font-size:14px;margin:4px 0}
+#cd{position:absolute;inset:0;display:none;text-align:center;font-size:140px;font-weight:800;color:var(--ac);padding-top:12%;pointer-events:none}
+.it{display:flex;gap:10px;align-items:center;padding:10px 4px;border-bottom:1px solid var(--line)}
+.it input{width:26px;height:26px;flex:none}.it>span:nth-child(2){flex:1}.it .r{text-align:right;font-weight:700}
+</style></head><body>
+
+<!-- HOME -->
+<div id="home" class="s on">
+ <h1>Tremor Meter</h1><div class="lbl">Accelerometer-based hand steadiness test</div>
+ <div class="card"><div class="lbl">Test duration</div>
+  <div class="row seg" id="durs"><button data-d="10">10 s</button><button data-d="20" class="on">20 s</button><button data-d="30">30 s</button></div></div>
+ <div class="card"><label class="lbl" for="tag">Session tag (optional)</label>
+  <input id="tag" type="text" maxlength="30" placeholder="e.g. after coffee"></div>
+ <label class="card row" style="align-items:center"><span>Demo mode<br><span class="lbl">synthetic 8 Hz tremor, no sensor needed</span></span>
+  <input id="demo" type="checkbox" style="flex:0 0 28px;height:28px"></label>
+ <div id="msg" class="msg"></div>
+ <button class="p" id="go">Start test</button><button id="hist">History</button>
+</div>
+
+<!-- INSTRUCTIONS -->
+<div id="instr" class="s">
+ <h1>How to hold the phone</h1>
+ <div class="card col"><div>1. Stand or sit upright.</div><div>2. Hold the phone <b>flat</b> in your palm, screen up, arm <b>fully extended</b> in front of you.</div>
+ <div>3. Keep still and relaxed for the whole test. Do not rest your arm on anything.</div><div>4. A 3-2-1 countdown starts, then recording. The first 1 s is discarded.</div></div>
+ <div style="flex:1"></div>
+ <button class="p" id="begin">I'm ready - start countdown</button><button id="back">Cancel</button>
+</div>
+
+<!-- RECORDING (no scrolling) -->
+<div id="rec" class="s" style="height:100dvh;overflow:hidden;padding:8px 0">
+ <div class="row" style="flex:none"><div id="rstat" class="lbl"></div><div id="rfs" class="lbl" style="text-align:right"></div></div>
+ <canvas id="trace" style="height:24dvh;flex:none"></canvas>
+ <div style="flex:1;min-height:0;position:relative"><canvas id="tgt" style="position:absolute;inset:0;height:100%"></canvas><div id="cd"></div></div>
+ <div class="bar" style="flex:none"><i id="pb"></i></div>
+ <button id="abort" class="d" style="flex:none;min-height:44px">Abort</button>
+</div>
+
+<!-- RESULTS -->
+<div id="res" class="s">
+ <h1>Results</h1>
+ <div id="rerr" class="card" style="display:none;border-color:var(--bad)"></div>
+ <div id="rok" class="col">
+  <div class="row">
+   <div class="card"><div class="lbl">Dominant freq</div><div class="big" id="vf">-</div><div class="lbl">Hz</div></div>
+   <div class="card"><div class="lbl">RMS (3-12 Hz)</div><div class="big" id="vr">-</div><div class="lbl">m/s&sup2;</div></div>
+   <div class="card"><div class="lbl">Steadiness</div><div class="big" id="vs">-</div><div class="lbl">/ 100</div></div>
+  </div>
+  <div class="card kv" id="kv"></div>
+  <h2>Filtered acceleration (x, y, z)</h2><canvas id="c1" class="plot"></canvas>
+  <h2>Spectrum (amplitude density)</h2><canvas id="c2" class="plot"></canvas>
+  <h2>Hand motion (x-y) with RMS circle</h2><canvas id="c3" style="aspect-ratio:1"></canvas>
+  <h2>Band power split</h2><div class="card" id="bands"></div>
+  <div class="note">This is a screening/experiment tool, not a medical device. Displacement is an estimate from double integration in the frequency domain.</div>
+ </div>
+ <div class="row"><button class="p" id="again">New test</button><button id="toh">History</button></div>
+</div>
+
+<!-- HISTORY -->
+<div id="his" class="s">
+ <h1>History</h1><div id="hn" class="lbl"></div>
+ <div id="hcharts" class="col">
+  <h2>Steadiness score per session</h2><canvas id="t1" style="height:230px"></canvas>
+  <h2>RMS (m/s&sup2;) per session</h2><canvas id="t2" style="height:230px"></canvas>
+  <h2>Select two sessions to compare spectra</h2>
+  <div id="hl" class="card" style="max-height:300px;overflow:auto;padding:4px 10px"></div>
+  <div id="cmpw" class="col" style="display:none"><canvas id="cmp" class="plot"></canvas><div id="leg" class="lbl"></div></div>
+ </div>
+ <div class="row"><button id="exp">Export CSV</button><button id="clr" class="d">Clear history</button></div>
+ <button class="p" id="hb">Back</button>
+</div>
+
+<script>
+"use strict";
+const $=s=>document.querySelector(s), sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const FS=50;               // uniform analysis rate (Hz) after resampling
+const KEY='tremor.v1';     // localStorage key
+let dur=20,tag='',raw=[],usingG=false,lastEv=0,timer=null,wl=null,raf=0,t0=0;
+let running=false,rec=false,runId=0,last=null,liveS=.3;
+const live={hp:[[0,0],[0,0],[0,0]],lt:0,init:false,v:[0,0,0],tr:[]};
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function show(id){document.querySelectorAll('.s').forEach(e=>e.classList.toggle('on',e.id===id));scrollTo(0,0);}
+function msg(t){$('#msg').textContent=t;show('home');}
+
+/* ================= SENSOR LAYER ================= */
+// Every sample (real or demo) enters here. Also runs a cheap 1st-order high-pass
+// (fc = 1 Hz) used ONLY for the live display; the final analysis re-filters properly.
+function push(t,x,y,z,g){
+  usingG=g; lastEv=performance.now();
+  const v=[x,y,z],RC=1/(2*Math.PI),a=RC/(RC+Math.max(.001,(t-live.lt)/1000));
+  if(!live.init){live.hp.forEach((h,i)=>{h[0]=v[i];h[1]=0});live.init=true;}
+  else live.hp.forEach((h,i)=>{h[1]=a*(h[1]+v[i]-h[0]);h[0]=v[i];});   // y[n]=a(y[n-1]+x[n]-x[n-1])
+  live.lt=t; live.v=live.hp.map(h=>h[1]); live.tr.push([lastEv,...live.v]);
+  if(rec) raw.push([t,x,y,z]);
+}
+function onMotion(e){
+  // Prefer gravity-free acceleration; else fall back to including-gravity (the high-pass removes the ~9.8 DC).
+  let a=e.acceleration,g=false;
+  if(!a||a.x==null){a=e.accelerationIncludingGravity;g=true;}
+  if(!a||a.x==null) return;
+  push(e.timeStamp||performance.now(),a.x,a.y,a.z,g);   // event timestamps (ms); only differences matter
+}
+function demoTick(){ // synthetic: 8 Hz tremor + slow 0.3-0.4 Hz drift + noise
+  const t=performance.now()/1000,n=()=>(Math.random()-.5)*.04,s=(f,p)=>Math.sin(2*Math.PI*f*t+p);
+  push(performance.now(),.8*s(.4,0)+.15*s(8,.3)+n(),.5*s(.3,1)+.1*s(8,1.1)+n(),.05*s(8,2)+n(),false);
+}
+function startSensor(){live.init=false;lastEv=0;live.tr=[];
+  if($('#demo').checked) timer=setInterval(demoTick,16); else addEventListener('devicemotion',onMotion);}
+function stopSensor(){clearInterval(timer);removeEventListener('devicemotion',onMotion);}
+async function lock(){try{wl=await navigator.wakeLock.request('screen');}catch(e){}} // no fallback: just keep screen on manually
+function unlock(){try{wl&&wl.release();}catch(e){} wl=null;}
+
+/* ================= TEST FLOW ================= */
+async function start(){
+  tag=$('#tag').value.trim(); $('#msg').textContent='';
+  if(!$('#demo').checked){
+    if(!window.isSecureContext) return msg('Sensors need HTTPS. Open this page from an https:// address (or use Demo mode).');
+    if(typeof DeviceMotionEvent==='undefined') return msg('DeviceMotion is not supported in this browser. Try Demo mode.');
+    if(typeof DeviceMotionEvent.requestPermission==='function'){ // iOS 13+: must be called from a tap
+      try{ if(await DeviceMotionEvent.requestPermission()!=='granted') return msg('Motion permission denied. Close the tab, reopen, and tap Allow (iOS: Settings > Safari > Motion & Orientation Access).'); }
+      catch(e){ return msg('Permission request failed: '+e.message); }
+    }
+  }
+  show('instr');
+}
+function endRun(){running=false;rec=false;cancelAnimationFrame(raf);stopSensor();unlock();}
+async function begin(){
+  const my=++runId; show('rec'); running=true; rec=false; $('#pb').style.width='0';
+  await lock(); startSensor(); loop();
+  for(let c=3;c>0;c--){
+    $('#cd').style.display='block';$('#cd').textContent=c;$('#rstat').textContent='Get ready...';
+    await sleep(1000); if(my!==runId) return;
+    if(c===3&&!lastEv){endRun();return msg('No motion data received. Check browser sensor permission, or use Demo mode on a laptop.');}
+  }
+  $('#cd').style.display='none'; raw=[]; t0=performance.now(); rec=true;
+}
+function loop(){
+  if(!running) return;
+  const now=performance.now();
+  drawTrace(now); drawTarget();
+  const tr=live.tr; if(tr.length>10) $('#rfs').textContent='fs ~ '+((tr.length-1)/((tr[tr.length-1][0]-tr[0][0])/1000)).toFixed(0)+' Hz';
+  if(rec){
+    const el=(now-t0)/1000;
+    $('#pb').style.width=Math.min(100,el/dur*100)+'%';
+    $('#rstat').textContent=(el<1?'Settling (discarded) ':'Recording ')+Math.min(el,dur).toFixed(1)+' / '+dur+' s';
+    if(now-lastEv>1200){endRun();return showErr('Sensor stopped streaming mid-test. Retry.');}  // watchdog
+    if(el>=dur){endRun();const r=analyse(raw);return r.err?showErr(r.err):render(r);}
+  }
+  raf=requestAnimationFrame(loop);
+}
+
+/* ================= SIGNAL PROCESSING ================= */
+// 2nd-order Butterworth high-pass (RBJ biquad, Q=0.7071), run forward AND backward
+// => zero phase distortion. Removes posture drift / gravity below ~1 Hz.
+function hpFilter(x,fc){
+  const w=2*Math.PI*fc/FS,c=Math.cos(w),al=Math.sin(w)/(2*Math.SQRT1_2),a0=1+al;
+  const b0=(1+c)/2/a0,b1=-(1+c)/a0,b2=b0,a1=-2*c/a0,a2=(1-al)/a0;
+  const run=a=>{let x1=a[0],x2=a[0],y1=0,y2=0;   // init as if steady DC => no start-up step
+    return a.map(v=>{const y=b0*v+b1*x1+b2*x2-a1*y1-a2*y2;x2=x1;x1=v;y2=y1;y1=y;return y;});};
+  return run(run(x).reverse()).reverse();
+}
+// In-place iterative radix-2 Cooley-Tukey FFT (length must be a power of 2).
+function fft(re,im){
+  const n=re.length;
+  for(let i=1,j=0;i<n;i++){let b=n>>1;for(;j&b;b>>=1)j^=b;j^=b;           // bit-reversal permutation
+    if(i<j){[re[i],re[j]]=[re[j],re[i]];[im[i],im[j]]=[im[j],im[i]];}}
+  for(let len=2;len<=n;len<<=1){                                          // butterfly stages
+    const ang=-2*Math.PI/len,wr=Math.cos(ang),wi=Math.sin(ang);
+    for(let i=0;i<n;i+=len){let cr=1,ci=0;
+      for(let k=0;k<len/2;k++){const u=i+k,v=u+len/2,tr=re[v]*cr-im[v]*ci,ti=re[v]*ci+im[v]*cr;
+        re[v]=re[u]-tr;im[v]=im[u]-ti;re[u]+=tr;im[u]+=ti;const nr=cr*wr-ci*wi;ci=cr*wi+ci*wr;cr=nr;}}}
+}
+// One-sided power spectral density (m/s^2)^2/Hz: mean removed, Hann window, zero-padded to >=4x length
+// (padding only interpolates => smooth peak). Scaling guarantees sum(PSD*df) = variance (Parseval).
+function psd(x){
+  const n=x.length;let NF=1;while(NF<n*4)NF<<=1;
+  const m=x.reduce((a,b)=>a+b,0)/n,re=new Float64Array(NF),im=new Float64Array(NF);let sw=0;
+  for(let i=0;i<n;i++){const w=.5-.5*Math.cos(2*Math.PI*i/(n-1));re[i]=(x[i]-m)*w;sw+=w*w;}
+  fft(re,im);
+  const P=new Float64Array(NF/2+1);
+  for(let k=0;k<P.length;k++) P[k]=(re[k]*re[k]+im[k]*im[k])/(FS*sw)*(k&&k<NF/2?2:1);
+  return P;
+}
+function analyse(raw){
+  if(raw.length<40) return {err:`Too few samples (${raw.length}). The sensor did not stream properly - retry.`};
+  const t0=raw[0][0],T=(raw[raw.length-1][0]-t0)/1000,rate=(raw.length-1)/T;   // measured sample rate
+  if(rate<20) return {err:`Sample rate too low (${rate.toFixed(0)} Hz). Close other apps and retry.`};
+  if(T<dur-1.5) return {err:'Recording incomplete - the sensor stopped mid-test. Retry.'};
+  // 1) Linear-interpolation resampling to a uniform 50 Hz grid (browser timing is jittery)
+  const N=Math.floor(T*FS);let ax=[[],[],[]],j=0;
+  for(let n=0;n<N;n++){const t=t0+n*1000/FS;while(j<raw.length-2&&raw[j+1][0]<t)j++;
+    const a=raw[j],b=raw[j+1],f=b[0]>a[0]?Math.min(1,Math.max(0,(t-a[0])/(b[0]-a[0]))):0;
+    for(let k=0;k<3;k++)ax[k].push(a[k+1]+f*(b[k+1]-a[k+1]));}
+  // 2) High-pass at 1 Hz per axis, then discard the first 1 s (settling transient)
+  ax=ax.map(a=>hpFilter(a,1).slice(FS));
+  const n=ax[0].length; if(n<5*FS) return {err:'Too few usable samples after trimming. Use a longer test.'};
+  // 3) Per-axis PSD summed over x,y,z = PSD of the vector (rotation-independent; avoids the
+  //    frequency-doubling you get from taking the magnitude |a| directly).
+  const Ps=ax.map(psd),NF=(Ps[0].length-1)*2,df=FS/NF,P=Ps[0].map((_,k)=>Ps[0][k]+Ps[1][k]+Ps[2][k]);
+  const bp=(a,b,f)=>{let s=0;for(let k=Math.ceil(a/df);k<=Math.floor(b/df);k++)s+=P[k]*(f?f(k*df):1);return s*df;};
+  // a) dominant frequency: spectral peak in 3-12 Hz
+  let pk=Math.ceil(3/df);for(let k=pk;k<=Math.floor(12/df);k++)if(P[k]>P[pk])pk=k;
+  const f0=pk*df;
+  // b) RMS acceleration in 3-12 Hz = sqrt(band power)
+  const rms=Math.sqrt(bp(3,12)), lowRms=Math.sqrt(bp(1,3));
+  if(rms>1.5||lowRms>1) return {err:'Movement too large, hold still and retry.'};
+  // c) peak-to-peak of the filtered signal on the axis with the largest variance
+  const vr=ax.map(a=>a.reduce((s,v)=>s+v*v,0)/n),pi=vr.indexOf(Math.max(...vr));
+  const p2p=Math.max(...ax[pi])-Math.min(...ax[pi]);
+  // d) displacement RMS (ESTIMATE): x(f)=a(f)/(2*pi*f)^2, so displacement PSD = accel PSD/(2*pi*f)^4
+  const disp=Math.sqrt(bp(3,12,f=>1/Math.pow(2*Math.PI*f,4)))*1000;      // metres -> mm
+  // e) band split (0-3, 4-7, 8-12 Hz), as % of the sum of the three bands
+  const b=[bp(0,3),bp(4,7),bp(8,12)],bs=b.reduce((a,c)=>a+c,0)||1,bands=b.map(v=>v/bs*100);
+  // f) Steadiness Score: logarithmic map of tremor RMS:
+  //    score = 100*(1 - log10(rms/0.01)/2), clamped to 0..100
+  //    => 0.01 m/s^2 -> 100, 0.10 -> 50, 1.00 -> 0. (Tune the constants for your device.)
+  const score=Math.round(Math.max(0,Math.min(100,100*(1-Math.log10(Math.max(rms,1e-6)/.01)/2))));
+  const sp=[];for(let i=0;i<=300;i++)sp.push(Math.sqrt(P[Math.min(P.length-1,Math.round(i*.05/df))]));
+  const rr=Math.sqrt(ax[0].reduce((s,v,i)=>s+v*v+ax[1][i]*ax[1][i],0)/n);   // RMS radius in the x-y plane
+  return {sig:ax,f0,rms,p2p,disp,bands,score,rate,n,sp:sp.map(v=>+v.toPrecision(3)),rr,g:usingG};
+}
+
+/* ================= DRAWING ================= */
+function cv(c){const r=c.getBoundingClientRect(),d=window.devicePixelRatio||1,W=Math.round(r.width*d),H=Math.round(r.height*d);
+  if(c.width!==W||c.height!==H){c.width=W;c.height=H;} const g=c.getContext('2d');g.setTransform(d,0,0,d,0,0);return [g,r.width,r.height];}
+// Generic line/scatter plot with grid, tick labels, optional shaded x-range.
+function plot(c,S,o){
+  const [g,w,h]=cv(c),L=36,B=o.nox?6:18,T=o.T||6,R=8;g.clearRect(0,0,w,h);
+  const X=x=>L+(x-o.x0)/(o.x1-o.x0)*(w-L-R),Y=y=>h-B-(y-o.y0)/(o.y1-o.y0)*(h-B-T);
+  g.font='11px system-ui';g.lineWidth=1;
+  if(o.shade){g.fillStyle='rgba(76,201,240,.16)';g.fillRect(X(o.shade[0]),T,X(o.shade[1])-X(o.shade[0]),h-B-T);}
+  g.fillStyle='#9fb0c2';g.strokeStyle='#243040';
+  for(let i=0;i<=4;i++){const v=o.y0+(o.y1-o.y0)*i/4,y=Y(v);g.beginPath();g.moveTo(L,y);g.lineTo(w-R,y);g.stroke();g.fillText(v.toFixed(o.yd??2),1,y+4);}
+  if(!o.nox)for(let i=0;i<=5;i++){const v=o.x0+(o.x1-o.x0)*i/5;g.fillText(String(+v.toFixed(1)),X(v)-6,h-4);}
+  S.forEach(s=>{g.strokeStyle=g.fillStyle=s.col;g.lineWidth=s.w||1.5;g.beginPath();
+    s.y.forEach((v,i)=>{const px=X(s.x[i]),py=Y(Math.max(o.y0,Math.min(o.y1,v)));
+      if(s.pt)g.fillRect(px-1,py-1,2,2);else i?g.lineTo(px,py):g.moveTo(px,py);});
+    if(!s.pt)g.stroke();});
+  return {X,Y,g,w,h};
+}
+const COL=['#4cc9f0','#ffb703','#80ed99'];
+function drawTrace(now){ // scrolling 4 s window of live filtered x,y,z
+  const tr=live.tr;while(tr.length&&now-tr[0][0]>4000)tr.shift();
+  let pk=0;tr.forEach(p=>{pk=Math.max(pk,Math.abs(p[1]),Math.abs(p[2]),Math.abs(p[3]));});
+  liveS+=(Math.max(.3,pk*1.2)-liveS)*.1;
+  plot($('#trace'),[1,2,3].map(k=>({x:tr.map(p=>(p[0]-now)/1000),y:tr.map(p=>p[k]),col:COL[k-1],w:1.2})),{x0:-4,x1:0,y0:-liveS,y1:liveS,yd:1});
+}
+function drawTarget(){ // dot = live filtered x/y acceleration (fixed scale, outer ring = 0.6 m/s^2)
+  const [g,w,h]=cv($('#tgt'));g.clearRect(0,0,w,h);
+  const cx=w/2,cy=h/2,R=Math.max(10,Math.min(w,h)/2-8),k=R/.6,cl=v=>Math.max(-R,Math.min(R,v));
+  g.strokeStyle='#2a3542';g.lineWidth=1;[1,.66,.33].forEach(f=>{g.beginPath();g.arc(cx,cy,R*f,0,7);g.stroke();});
+  g.beginPath();g.moveTo(cx-R,cy);g.lineTo(cx+R,cy);g.moveTo(cx,cy-R);g.lineTo(cx,cy+R);g.stroke();
+  live.tr.slice(-40).forEach((p,i,a)=>{g.fillStyle=`rgba(76,201,240,${i/a.length*.5})`;g.beginPath();g.arc(cx+cl(p[1]*k),cy-cl(p[2]*k),3,0,7);g.fill();});
+  g.fillStyle='#ff6b6b';g.beginPath();g.arc(cx+cl(live.v[0]*k),cy-cl(live.v[1]*k),9,0,7);g.fill();
+}
+
+/* ================= RESULTS ================= */
+function showErr(t){show('res');$('#rerr').style.display='block';$('#rerr').innerHTML='<b style="color:var(--bad)">Test not valid</b><br>'+esc(t);$('#rok').style.display='none';}
+function render(r){
+  last=r;save(r);show('res');$('#rerr').style.display='none';$('#rok').style.display='flex';
+  $('#vf').textContent=r.f0.toFixed(1);$('#vr').textContent=r.rms.toFixed(3);$('#vs').textContent=r.score;
+  $('#vs').style.color=r.score>=70?'var(--ok)':r.score>=40?'var(--wn)':'var(--bad)';
+  const kv=[['Peak-to-peak',r.p2p.toFixed(3)+' m/s\u00b2'],['Displacement RMS (est.)',r.disp.toFixed(2)+' mm'],['Measured sample rate',r.rate.toFixed(1)+' Hz'],
+    ['Analysed',r.n+' samples @ '+FS+' Hz'],['Source',r.g?'accel. incl. gravity + HP':'linear acceleration'],['Tag',esc(tag||'-')]];
+  $('#kv').innerHTML=kv.map(a=>`<span class="lbl">${a[0]}</span><span>${a[1]}</span>`).join('');
+  $('#bands').innerHTML=[['0-3 Hz drift',0],['4-7 Hz low',1],['8-12 Hz phys.',2]].map(a=>
+    `<div class="band"><span>${a[0]}</span><div class="bar"><i style="width:${r.bands[a[1]]}%"></i></div><b>${r.bands[a[1]].toFixed(0)}%</b></div>`).join('');
+  // time-domain
+  const tt=r.sig[0].map((_,i)=>i/FS),m=Math.max(.05,...r.sig.map(a=>Math.max(...a.map(Math.abs))))*1.1;
+  plot($('#c1'),r.sig.map((a,k)=>({x:tt,y:a,col:COL[k],w:1})),{x0:0,x1:tt[tt.length-1],y0:-m,y1:m});
+  // spectrum with 3-12 Hz band shaded and peak label
+  const sx=r.sp.map((_,i)=>i*.05),sm=Math.max(...r.sp)*1.2,p=plot($('#c2'),[{x:sx,y:r.sp,col:COL[0],w:2}],{x0:0,x1:15,y0:0,y1:sm,shade:[3,12],yd:3});
+  p.g.fillStyle='#fff';p.g.font='bold 12px system-ui';p.g.fillText(r.f0.toFixed(1)+' Hz',Math.min(p.X(r.f0)+6,p.w-52),p.Y(r.sp[Math.round(r.f0/.05)]||0)+12);
+  // x-y scatter + RMS radius circle
+  const q=Math.max(.05,...r.sig[0].map(Math.abs),...r.sig[1].map(Math.abs))*1.1,t=plot($('#c3'),[{x:r.sig[0],y:r.sig[1],col:'rgba(76,201,240,.6)',pt:true}],{x0:-q,x1:q,y0:-q,y1:q});
+  t.g.strokeStyle='#ff6b6b';t.g.lineWidth=2;t.g.beginPath();t.g.ellipse(t.X(0),t.Y(0),t.X(r.rr)-t.X(0),t.Y(0)-t.Y(r.rr),0,0,7);t.g.stroke();
+  t.g.fillStyle='#ff6b6b';t.g.fillText('RMS radius '+r.rr.toFixed(3)+' m/s\u00b2',40,16);
+}
+
+/* ================= HISTORY ================= */
+function load(){try{return JSON.parse(localStorage.getItem(KEY))||[];}catch(e){return[];}}
+function save(r){const S=load();S.push({ts:Date.now(),tag,dur,demo:$('#demo').checked,rate:r.rate,f0:r.f0,rms:r.rms,p2p:r.p2p,disp:r.disp,bands:r.bands,score:r.score,sp:r.sp});
+  try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}}
+function trend(c,vals,tags,y0,y1,col,yd){ // line chart per session with tag labels on the points
+  const n=vals.length,o=plot(c,[{x:vals.map((_,i)=>i),y:vals,col,w:2}],{x0:-.5,x1:Math.max(n-.5,.5),y0,y1,yd,T:56,nox:true});
+  vals.forEach((v,i)=>{const x=o.X(i),y=o.Y(v);o.g.fillStyle=col;o.g.beginPath();o.g.arc(x,y,4,0,7);o.g.fill();
+    o.g.save();o.g.translate(x,y-8);o.g.rotate(-.9);o.g.fillStyle='#f2f5f8';o.g.fillText((tags[i]||'#'+(i+1)).slice(0,12),0,0);o.g.restore();});
+}
+function drawHist(){
+  const S=load();show('his');$('#hn').textContent=S.length?S.length+' session(s)':'No sessions yet.';
+  $('#hcharts').style.display=S.length?'flex':'none';$('#cmpw').style.display='none';if(!S.length)return;
+  const tg=S.map(s=>s.tag);trend($('#t1'),S.map(s=>s.score),tg,0,100,COL[2],0);
+  trend($('#t2'),S.map(s=>s.rms),tg,0,Math.max(.05,...S.map(s=>s.rms))*1.25,COL[1],3);
+  $('#hl').innerHTML=S.map((s,i)=>`<label class="it"><input type="checkbox" data-i="${i}"><span><b>${esc(s.tag||'(no tag)')}</b>${s.demo?' (demo)':''}<br><span class="lbl">${new Date(s.ts).toLocaleString()} - ${s.dur}s - ${s.f0.toFixed(1)} Hz</span></span><span class="r">${s.score}<br><span class="lbl">${s.rms.toFixed(3)}</span></span></label>`).reverse().join('');
+}
+$('#hl').onchange=e=>{ // compare two sessions: overlay their spectra
+  const S=load(),pk=[...$('#hl').querySelectorAll('input:checked')];
+  if(pk.length>2){e.target.checked=false;return;}
+  $('#cmpw').style.display=pk.length===2?'flex':'none';if(pk.length!==2)return;
+  const ss=pk.map(p=>S[p.dataset.i]),m=Math.max(...ss.map(s=>Math.max(...s.sp)))*1.2,x=ss[0].sp.map((_,i)=>i*.05);
+  plot($('#cmp'),ss.map((s,i)=>({x,y:s.sp,col:COL[i],w:2})),{x0:0,x1:15,y0:0,y1:m,shade:[3,12],yd:3});
+  $('#leg').innerHTML=ss.map((s,i)=>`<span style="color:${COL[i]}">&#9632;</span> ${esc(s.tag||'(no tag)')}: ${s.f0.toFixed(1)} Hz, RMS ${s.rms.toFixed(3)}, score ${s.score}`).join('<br>');
+};
+function csv(){
+  const h='timestamp,tag,duration_s,demo,fs_hz,peak_hz,rms_ms2,p2p_ms2,disp_mm,pct_0_3,pct_4_7,pct_8_12,score';
+  const rows=load().map(s=>{let t=s.tag||'';if(/^[=+\-@]/.test(t))t="'"+t;  // block spreadsheet formula injection
+    return [new Date(s.ts).toISOString(),'"'+t.replace(/"/g,'""')+'"',s.dur,s.demo,s.rate.toFixed(1),s.f0.toFixed(2),s.rms.toFixed(4),s.p2p.toFixed(4),s.disp.toFixed(3),...s.bands.map(b=>b.toFixed(1)),s.score].join(',');});
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([[h,...rows].join('\n')],{type:'text/csv'}));a.download='tremor_sessions.csv';a.click();
+}
+
+/* ================= WIRING ================= */
+$('#durs').onclick=e=>{const d=e.target.dataset.d;if(!d)return;dur=+d;[...$('#durs').children].forEach(b=>b.classList.toggle('on',b===e.target));};
+$('#go').onclick=start;$('#begin').onclick=begin;$('#back').onclick=()=>show('home');
+$('#abort').onclick=()=>{runId++;endRun();show('home');};
+$('#again').onclick=()=>show('home');$('#toh').onclick=drawHist;$('#hist').onclick=drawHist;$('#hb').onclick=()=>show('home');
+$('#exp').onclick=csv;$('#clr').onclick=()=>{if(confirm('Delete all saved sessions?')){localStorage.removeItem(KEY);drawHist();}};
+addEventListener('resize',()=>{if($('#res').classList.contains('on')&&last&&$('#rok').style.display!=='none')render(last);});
+</script></body></html>
